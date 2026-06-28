@@ -1,0 +1,98 @@
+name: Publish to Homebrew Core
+
+on:
+  workflow_run:
+    workflows: [Build & Release]
+    types: [completed]
+  workflow_dispatch:
+
+jobs:
+  publish-to-homebrew-core:
+    if: github.event.workflow_run.conclusion == 'success' || github.event.workflow_run == ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Get current version
+        id: get-version
+        run: |
+          VERSION="${{ github.ref_name }}"
+          if [[ "$VERSION" =~ ^v ]]; then
+            VERSION="${VERSION#v}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Download all release artifacts
+        if: github.event.workflow_run != ''
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Checkout homebrew-core (ns-sandbox branch)
+        uses: actions/checkout@v4
+        with:
+          repository: navysummer/homebrew-core
+          ref: ns-sandbox
+          token: ${{ secrets.GH_TOKEN }}
+          path: homebrew-core
+
+      - name: Download release binaries (if not downloading artifacts)
+        if: github.event.workflow_run == ''
+        run: |
+          cd release-artifacts
+          echo "Downloading binaries manually..."
+          mkdir -p release-artifacts/all
+
+      - name: Create release files structure
+        run: |
+          VERSION="${{ steps.get-version.outputs.version }}"
+          HOMEBREW_CORE_DIR="homebrew-core/Formula/n"
+          
+          # Create directory if it doesn't exist
+          mkdir -p "$HOMEBREW_CORE_DIR"
+          
+          # Create a file to track the release
+          RELEASE_TRACKER="homebrew-core/_releases/release-${VERSION}.json"
+          mkdir -p "$(dirname "$RELEASE_TRACKER")"
+          
+          cat > "$RELEASE_TRACKER" << EOF
+{
+  "version": "$VERSION",
+  "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "artifacts": {
+    "ns-sandbox-v${VERSION}-x86_64-unknown-linux-gnu.tar.gz": {
+      "url": "https://github.com/navysummer/ns-sandbox/releases/download/v${VERSION}/ns-sandbox-v${VERSION}-x86_64-unknown-linux-gnu.tar.gz",
+      "sha256": "$(grep "ns-sandbox" release-artifacts/*/ns-sandbox-*.sha256 2>/dev/null | head -1 | cut -d' ' -f1 || echo "")"
+    },
+    "ns-sandbox-v${VERSION}-aarch64-unknown-linux-gnu.tar.gz": {
+      "url": "https://github.com/navysummer/ns-sandbox/releases/download/v${VERSION}/ns-sandbox-v${VERSION}-aarch64-unknown-linux-gnu.tar.gz",
+      "sha256": "$(grep "ns-sandbox" release-artifacts/*/ns-sandbox-*.sha256 2>/dev/null | head -1 | cut -d' ' -f1 || echo "")"
+    },
+    "ns-sandbox-v${VERSION}-x86_64-unknown-linux-musl.tar.gz": {
+      "url": "https://github.com/navysummer/ns-sandbox/releases/download/v${VERSION}/ns-sandbox-v${VERSION}-x86_64-unknown-linux-musl.tar.gz",
+      "sha256": "$(grep "ns-sandbox" release-artifacts/*/ns-sandbox-*.sha256 2>/dev/null | head -1 | cut -d' ' -f1 || echo "")"
+    },
+    "ns-sandbox-v${VERSION}-aarch64-unknown-linux-musl.tar.gz": {
+      "url": "https://github.com/navysummer/ns-sandbox/releases/download/v${VERSION}/ns-sandbox-v${VERSION}-aarch64-unknown-linux-musl.tar.gz",
+      "sha256": "$(grep "ns-sandbox" release-artifacts/*/ns-sandbox-*.sha256 2>/dev/null | head -1 | cut -d' ' -f1 || echo "")"
+    }
+  }
+}
+EOF
+
+      - name: Create and push ns-sandbox branch
+        run: |
+          cd homebrew-core
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+          git add Formula/n/ Formula/n/.*
+          git add _releases/
+          
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          
+          git commit -m "Add release artifacts for ns-sandbox v${{ steps.get-version.outputs.version }}"
+          git push origin ns-sandbox
