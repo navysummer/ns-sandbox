@@ -2,10 +2,9 @@ use anyhow::{Context, Result};
 use std::process::Command;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{CloseHandle, LocalFree, HANDLE, HLOCAL};
-use windows::Win32::Security::Authorization::SetTokenInformation;
 use windows::Win32::Security::{
-    ConvertStringSidToSidW, OpenProcessToken, SID_AND_ATTRIBUTES, TOKEN_ADJUST_DEFAULT,
-    TOKEN_INFORMATION_CLASS, TOKEN_MANDATORY_LABEL, TOKEN_QUERY,
+    SetTokenInformation, TOKEN_ADJUST_DEFAULT, TOKEN_INFORMATION_CLASS, TOKEN_MANDATORY_LABEL,
+    TOKEN_QUERY,
 };
 use windows::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JobObjectBasicLimitInformation,
@@ -13,7 +12,9 @@ use windows::Win32::System::JobObjects::{
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
     JOB_OBJECT_LIMIT_JOB_TIME, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_PROCESS_MEMORY,
 };
-use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcess, PROCESS_ALL_ACCESS};
+use windows::Win32::System::Threading::{
+    GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_ALL_ACCESS,
+};
 
 use super::SandboxConfig;
 
@@ -66,7 +67,7 @@ pub fn execute_sandboxed(command: &str, config: &SandboxConfig) -> Result<()> {
 
         if config.timeout_secs > 0 {
             basic_info.LimitFlags |= JOB_OBJECT_LIMIT_JOB_TIME;
-            basic_info.PerJobUserTimeLimit.QuadPart = config.timeout_secs as i64 * 10_000_000;
+            basic_info.PerJobUserTimeLimit = config.timeout_secs as i64 * 10_000_000;
         }
 
         SetInformationJobObject(
@@ -83,7 +84,7 @@ pub fn execute_sandboxed(command: &str, config: &SandboxConfig) -> Result<()> {
                     LimitFlags: JOB_OBJECT_LIMIT_PROCESS_MEMORY,
                     ..Default::default()
                 },
-                ProcessMemoryLimit: config.memory_limit_mb * 1024 * 1024,
+                ProcessMemoryLimit: (config.memory_limit_mb * 1024 * 1024) as usize,
                 ..Default::default()
             };
 
@@ -140,10 +141,12 @@ unsafe fn set_low_integrity_level() {
     let low_sid_str = windows::core::HSTRING::from("S-1-16-4096");
     let mut sid: *mut core::ffi::c_void = std::ptr::null_mut();
 
-    if ConvertStringSidToSidW(PCWSTR(low_sid_str.as_ptr()), &mut sid).is_ok() {
+    if windows::Win32::Security::ConvertStringSidToSidW(PCWSTR(low_sid_str.as_ptr()), &mut sid)
+        .is_ok()
+    {
         let label = TOKEN_MANDATORY_LABEL {
-            Label: SID_AND_ATTRIBUTES {
-                Sid: sid as *mut _,
+            Label: windows::Win32::Security::SID_AND_ATTRIBUTES {
+                Sid: sid,
                 Attributes: 0,
             },
         };
@@ -155,7 +158,7 @@ unsafe fn set_low_integrity_level() {
             std::mem::size_of::<TOKEN_MANDATORY_LABEL>() as u32,
         );
 
-        let _ = LocalFree(HLOCAL(sid as *mut _));
+        let _ = LocalFree(Some(HLOCAL(sid as *mut _)));
     }
 
     let _ = CloseHandle(token);

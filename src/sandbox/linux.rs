@@ -341,25 +341,25 @@ fn set_resource_limits(config: &SandboxConfig) {
 
     if config.timeout_secs > 0 {
         let lim = rlimit {
-            rlim_cur: config.timeout_secs,
-            rlim_max: config.timeout_secs + 5,
+            rlim_cur: config.timeout_secs as _,
+            rlim_max: (config.timeout_secs + 5) as _,
         };
         unsafe { libc::setrlimit(libc::RLIMIT_CPU, &lim) };
     }
 
     if config.memory_limit_mb > 0 {
-        let bytes = config.memory_limit_mb as u64 * 1024 * 1024;
+        let bytes = config.memory_limit_mb * 1024 * 1024;
         let lim = rlimit {
-            rlim_cur: bytes,
-            rlim_max: bytes,
+            rlim_cur: bytes as _,
+            rlim_max: bytes as _,
         };
         unsafe { libc::setrlimit(libc::RLIMIT_AS, &lim) };
     }
 
     if config.process_limit > 0 {
         let lim = rlimit {
-            rlim_cur: config.process_limit as u64,
-            rlim_max: config.process_limit as u64,
+            rlim_cur: config.process_limit as _,
+            rlim_max: config.process_limit as _,
         };
         unsafe { libc::setrlimit(libc::RLIMIT_NPROC, &lim) };
     }
