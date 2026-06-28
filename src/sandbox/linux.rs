@@ -4,6 +4,7 @@ use nix::sched::{unshare, CloneFlags};
 use nix::sys::wait::waitpid;
 use nix::unistd::{fork, ForkResult};
 use std::ffi::CString;
+use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
 use super::SandboxConfig;
@@ -281,7 +282,7 @@ fn setup_mounts(config: &SandboxConfig) -> Result<()> {
             std::fs::create_dir_all(&mount_point).ok();
             mount(
                 Some("tmpfs"),
-                &mount_point,
+                mount_point.as_str(),
                 Some("tmpfs"),
                 MsFlags::MS_NOSUID | MsFlags::MS_NODEV,
                 None::<&str>,
@@ -293,7 +294,7 @@ fn setup_mounts(config: &SandboxConfig) -> Result<()> {
             std::fs::create_dir_all(parent).ok();
             mount(
                 Some(trimmed),
-                &target,
+                target.as_str(),
                 None::<&str>,
                 MsFlags::MS_BIND,
                 None::<&str>,
@@ -328,7 +329,7 @@ fn create_minimal_devices() -> Result<()> {
     for (path, dev) in &devices {
         let cpath = CString::new(*path).map_err(|e| anyhow::anyhow!("CString error: {}", e))?;
         unsafe {
-            libc::mknod(cpath.as_ptr(), 0o666 | libc::S_IFCHR, *dev);
+            libc::mknod(cpath.as_ptr(), 0o666 | libc::S_IFCHR, *dev as libc::dev_t);
         }
     }
     std::os::unix::fs::symlink("/dev/tty", "/dev/console").ok();
