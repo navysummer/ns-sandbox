@@ -140,12 +140,12 @@ unsafe fn set_low_integrity_level() {
     }
 
     let low_sid_str = windows::core::HSTRING::from("S-1-16-4096");
-    let mut sid: *mut core::ffi::c_void = std::ptr::null_mut();
+    let mut sid = PSID::default();
 
     if ConvertStringSidToSidW(PCWSTR(low_sid_str.as_ptr()), &mut sid).is_ok() {
         let label = TOKEN_MANDATORY_LABEL {
             Label: SID_AND_ATTRIBUTES {
-                Sid: PSID(sid),
+                Sid: sid,
                 Attributes: 0,
             },
         };
@@ -157,7 +157,7 @@ unsafe fn set_low_integrity_level() {
             std::mem::size_of::<TOKEN_MANDATORY_LABEL>() as u32,
         );
 
-        let _ = LocalFree(Some(HLOCAL(sid as *mut _)));
+        let _ = LocalFree(Some(HLOCAL(sid.0 as *mut _)));
     }
 
     let _ = CloseHandle(token);
