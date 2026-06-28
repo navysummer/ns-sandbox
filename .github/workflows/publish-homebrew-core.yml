@@ -1,14 +1,15 @@
 name: Publish to Homebrew Core
 
 on:
-  workflow_run:
-    workflows: [Build & Release]
-    types: [completed]
   workflow_dispatch:
+    inputs:
+      version:
+        description: Version to publish
+        required: false
+        default: "v$(curl -s https://api.github.com/repos/navysummer/ns-sandbox/releases/latest | grep tag_name | cut -d\" -f4)"
 
 jobs:
   publish-to-homebrew-core:
-    if: github.event.workflow_run.conclusion == 'success' || github.event.workflow_run == ''
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -16,14 +17,18 @@ jobs:
       - name: Get current version
         id: get-version
         run: |
-          VERSION="${{ github.ref_name }}"
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="$(curl -s https://api.github.com/repos/navysummer/ns-sandbox/releases/latest | grep tag_name | cut -d\" -f4)"
+          fi
           if [[ "$VERSION" =~ ^v ]]; then
             VERSION="${VERSION#v}"
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Download all release artifacts
-        if: github.event.workflow_run != ''
+        if: github.event.inputs.version == ''
         uses: actions/download-artifact@v4
         with:
           path: release-artifacts
@@ -36,25 +41,13 @@ jobs:
           token: ${{ secrets.GH_TOKEN }}
           path: homebrew-core
 
-      - name: Download release binaries (if not downloading artifacts)
-        if: github.event.workflow_run == ''
-        run: |
-          cd release-artifacts
-          echo "Downloading binaries manually..."
-          mkdir -p release-artifacts/all
-
       - name: Create release files structure
         run: |
           VERSION="${{ steps.get-version.outputs.version }}"
           HOMEBREW_CORE_DIR="homebrew-core/Formula/n"
+          RELEASE_TRACKER="$HOME/release-tracker-${VERSION}.json"
           
-          # Create directory if it doesn't exist
-          mkdir -p "$HOMEBREW_CORE_DIR"
-          
-          # Create a file to track the release
-          RELEASE_TRACKER="homebrew-core/_releases/release-${VERSION}.json"
-          mkdir -p "$(dirname "$RELEASE_TRACKER")"
-          
+          # Create the tracking file with release metadata
           cat > "$RELEASE_TRACKER" << EOF
 {
   "version": "$VERSION",
@@ -62,23 +55,67 @@ jobs:
   "artifacts": {
     "ns-sandbox-v${VERSION}-x86_64-unknown-linux-gnu.tar.gz": {
       "url": "https://github.com/navysummer/ns-sandbox/releases/download/v${VERSION}/ns-sandbox-v${VERSION}-x86_64-unknown-linux-gnu.tar.gz",
-      "sha256": "$(grep "ns-sandbox" release-artifacts/*/ns-sandbox-*.sha256 2>/dev/null | head -1 | cut -d' ' -f1 || echo "")"
+      "sha256": ""
     },
     "ns-sandbox-v${VERSION}-aarch64-unknown-linux-gnu.tar.gz": {
       "url": "https://github.com/navysummer/ns-sandbox/releases/download/v${VERSION}/ns-sandbox-v${VERSION}-aarch64-unknown-linux-gnu.tar.gz",
-      "sha256": "$(grep "ns-sandbox" release-artifacts/*/ns-sandbox-*.sha256 2>/dev/null | head -1 | cut -d' ' -f1 || echo "")"
+      "sha256": ""
     },
     "ns-sandbox-v${VERSION}-x86_64-unknown-linux-musl.tar.gz": {
       "url": "https://github.com/navysummer/ns-sandbox/releases/download/v${VERSION}/ns-sandbox-v${VERSION}-x86_64-unknown-linux-musl.tar.gz",
-      "sha256": "$(grep "ns-sandbox" release-artifacts/*/ns-sandbox-*.sha256 2>/dev/null | head -1 | cut -d' ' -f1 || echo "")"
+      "sha256": ""
     },
     "ns-sandbox-v${VERSION}-aarch64-unknown-linux-musl.tar.gz": {
       "url": "https://github.com/navysummer/ns-sandbox/releases/download/v${VERSION}/ns-sandbox-v${VERSION}-aarch64-unknown-linux-musl.tar.gz",
-      "sha256": "$(grep "ns-sandbox" release-artifacts/*/ns-sandbox-*.sha256 2>/dev/null | head -1 | cut -d' ' -f1 || echo "")"
+      "sha256": ""
     }
   }
 }
 EOF
+          
+          # Move the tracking file to the proper location in the homebrew-core repo
+          mkdir -p "homebrew-core/_releases"
+          mv "$RELEASE_TRACKER" "homebrew-core/_releases/release-${VERSION}.json"
+
+      - name: Update Homebrew Formula
+        run: |
+          VERSION="${{ steps.get-version.outputs.version }}"
+          HOMEBREW_CORE_DIR="homebrew-core/Formula/n"
+          
+          # Check if formula exists
+          if [ ! -f "$HOMEBREW_CORE_DIR/ns-sandbox.rb" ]; then
+            # Create initial formula
+            cat > "$HOMEBREW_CORE_DIR/ns-sandbox.rb" << EOF
+class Nssandbox < Formula
+  desc "Cross-platform command-line ns-sandbox for Linux, macOS, and Windows"
+  homepage "https://github.com/navysummer/ns-sandbox"
+  license "MIT"
+  version "${VERSION}"
+  
+  on_linux do
+    url "https://github.com/navysummer/ns-sandbox/releases/download/v${VERSION}/ns-sandbox-v${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+  end
+  on_arm do
+    url "https://github.com/navysummer/ns-sandbox/releases/download/v${VERSION}/ns-sandbox-v${VERSION}-aarch64-unknown-linux-gnu.tar.gz"
+  end
+  
+  def install
+    bin.install "ns-sandbox"
+  end
+end
+EOF
+          else
+            # Update existing formula
+            # For now, just update the version - checksums would need to be parsed from releases
+            sed -i "s/version = .*/version = \"${VERSION}\"/" "$HOMEBREW_CORE_DIR/ns-sandbox.rb"
+            # Update download URLs
+            if grep -q "on_linux do" "$HOMEBREW_CORE_DIR/ns-sandbox.rb"; then
+              sed -i "s|on_linux do.*|on_linux do\n    url \"https://github.com/navysummer/ns-sandbox/releases/download/v${VERSION}/ns-sandbox-v${VERSION}-x86_64-unknown-linux-gnu.tar.gz\"|" "$HOMEBREW_CORE_DIR/ns-sandbox.rb"
+            fi
+            if grep -q "on_arm do" "$HOMEBREW_CORE_DIR/ns-sandbox.rb"; then
+              sed -i "s|on_arm do.*|on_arm do\n    url \"https://github.com/navysummer/ns-sandbox/releases/download/v${VERSION}/ns-sandbox-v${VERSION}-aarch64-unknown-linux-gnu.tar.gz\"|" "$HOMEBREW_CORE_DIR/ns-sandbox.rb"
+            fi
+          fi
 
       - name: Create and push ns-sandbox branch
         run: |
@@ -86,8 +123,7 @@ EOF
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           
-          git add Formula/n/ Formula/n/.*
-          git add _releases/
+          git add Formula/n/ Formula/n/.* _releases/
           
           if git diff --staged --quiet; then
             echo "No changes to commit"
