@@ -33,7 +33,7 @@ jobs:
         with:
           path: release-artifacts
 
-      - name: Checkout homebrew-core (ns-sandbox branch)
+      - name: CheckoutHomebrewCore
         uses: actions/checkout@v4
         with:
           repository: navysummer/homebrew-core
@@ -41,11 +41,56 @@ jobs:
           token: ${{ secrets.GH_TOKEN }}
           path: homebrew-core
 
-      - name: Create release files structure
+      - name: Update Homebrew Formula
         run: |
           VERSION="${{ steps.get-version.outputs.version }}"
           HOMEBREW_CORE_DIR="homebrew-core/Formula/n"
-          RELEASE_TRACKER="$HOME/release-tracker-${VERSION}.json"
+          
+          # Check if formula exists and backup
+          if [ -f "$HOMEBREW_CORE_DIR/ns-sandbox.rb" ]; then
+            cp "$HOMEBREW_CORE_DIR/ns-sandbox.rb" "$HOMEBREW_CORE_DIR/ns-sandbox.rb.backup"
+          fi
+          
+          # Create formula with proper escaping
+          cat > "$HOMEBREW_CORE_DIR/ns-sandbox.rb" << 'FORMULA_EOF'
+class Nssandbox < Formula
+  desc "Cross-platform command-line ns-sandbox for Linux, macOS, and Windows"
+  homepage "https://github.com/navysummer/ns-sandbox"
+  license "MIT"
+  version "VERSION_PLACEHOLDER"
+  
+  on_linux do
+    url "https://github.com/navysummer/ns-sandbox/releases/download/vVERSION_PLACEHOLDER/ns-sandbox-vVERSION_PLACEHOLDER-x86_64-unknown-linux-gnu.tar.gz"
+    sha256 ""
+  end
+  on_arm do
+    url "https://github.com/navysummer/ns-sandbox/releases/download/vVERSION_PLACEHOLDER/ns-sandbox-vVERSION_PLACEHOLDER-aarch64-unknown-linux-gnu.tar.gz"
+    sha256 ""
+  end
+  
+  def install
+    bin.install "ns-sandbox"
+  end
+end
+FORMULA_EOF
+          
+          # Update placeholders and URLs in formula
+          sed -i "s/VERSION_PLACEHOLDER/$VERSION/g" "$HOMEBREW_CORE_DIR/ns-sandbox.rb"
+          
+          # Remove backup if it exists
+          if [ -f "$HOMEBREW_CORE_DIR/ns-sandbox.rb.backup" ]; then
+            rm "$HOMEBREW_CORE_DIR/ns-sandbox.rb.backup"
+          fi
+
+      - name: Create release files structure
+        run: |
+          VERSION="${{ steps.get-version.outputs.version }}"
+          
+          # Check if _releases directory exists
+          RELEASES_DIR="homebrew-core/_releases"
+          mkdir -p "$RELEASES_DIR"
+          
+          RELEASE_TRACKER="$RELEASES_DIR/release-${VERSION}.json"
           
           # Create the tracking file with release metadata
           cat > "$RELEASE_TRACKER" << EOF
@@ -72,50 +117,6 @@ jobs:
   }
 }
 EOF
-          
-          # Move the tracking file to the proper location in the homebrew-core repo
-          mkdir -p "homebrew-core/_releases"
-          mv "$RELEASE_TRACKER" "homebrew-core/_releases/release-${VERSION}.json"
-
-      - name: Update Homebrew Formula
-        run: |
-          VERSION="${{ steps.get-version.outputs.version }}"
-          HOMEBREW_CORE_DIR="homebrew-core/Formula/n"
-          
-          # Check if formula exists
-          if [ ! -f "$HOMEBREW_CORE_DIR/ns-sandbox.rb" ]; then
-            # Create initial formula
-            cat > "$HOMEBREW_CORE_DIR/ns-sandbox.rb" << EOF
-class Nssandbox < Formula
-  desc "Cross-platform command-line ns-sandbox for Linux, macOS, and Windows"
-  homepage "https://github.com/navysummer/ns-sandbox"
-  license "MIT"
-  version "${VERSION}"
-  
-  on_linux do
-    url "https://github.com/navysummer/ns-sandbox/releases/download/v${VERSION}/ns-sandbox-v${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
-  end
-  on_arm do
-    url "https://github.com/navysummer/ns-sandbox/releases/download/v${VERSION}/ns-sandbox-v${VERSION}-aarch64-unknown-linux-gnu.tar.gz"
-  end
-  
-  def install
-    bin.install "ns-sandbox"
-  end
-end
-EOF
-          else
-            # Update existing formula
-            # For now, just update the version - checksums would need to be parsed from releases
-            sed -i "s/version = .*/version = \"${VERSION}\"/" "$HOMEBREW_CORE_DIR/ns-sandbox.rb"
-            # Update download URLs
-            if grep -q "on_linux do" "$HOMEBREW_CORE_DIR/ns-sandbox.rb"; then
-              sed -i "s|on_linux do.*|on_linux do\n    url \"https://github.com/navysummer/ns-sandbox/releases/download/v${VERSION}/ns-sandbox-v${VERSION}-x86_64-unknown-linux-gnu.tar.gz\"|" "$HOMEBREW_CORE_DIR/ns-sandbox.rb"
-            fi
-            if grep -q "on_arm do" "$HOMEBREW_CORE_DIR/ns-sandbox.rb"; then
-              sed -i "s|on_arm do.*|on_arm do\n    url \"https://github.com/navysummer/ns-sandbox/releases/download/v${VERSION}/ns-sandbox-v${VERSION}-aarch64-unknown-linux-gnu.tar.gz\"|" "$HOMEBREW_CORE_DIR/ns-sandbox.rb"
-            fi
-          fi
 
       - name: Create and push ns-sandbox branch
         run: |
