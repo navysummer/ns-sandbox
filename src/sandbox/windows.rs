@@ -2,9 +2,10 @@ use anyhow::{Context, Result};
 use std::process::Command;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{CloseHandle, LocalFree, HANDLE, HLOCAL};
+use windows::Win32::Security::Authorization::ConvertStringSidToSidW;
 use windows::Win32::Security::{
-    SetTokenInformation, TOKEN_ADJUST_DEFAULT, TOKEN_INFORMATION_CLASS, TOKEN_MANDATORY_LABEL,
-    TOKEN_QUERY,
+    SetTokenInformation, PSID, SID_AND_ATTRIBUTES, TOKEN_ADJUST_DEFAULT, TOKEN_INFORMATION_CLASS,
+    TOKEN_MANDATORY_LABEL, TOKEN_QUERY,
 };
 use windows::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JobObjectBasicLimitInformation,
@@ -141,19 +142,17 @@ unsafe fn set_low_integrity_level() {
     let low_sid_str = windows::core::HSTRING::from("S-1-16-4096");
     let mut sid: *mut core::ffi::c_void = std::ptr::null_mut();
 
-    if windows::Win32::Security::ConvertStringSidToSidW(PCWSTR(low_sid_str.as_ptr()), &mut sid)
-        .is_ok()
-    {
+    if ConvertStringSidToSidW(PCWSTR(low_sid_str.as_ptr()), &mut sid).is_ok() {
         let label = TOKEN_MANDATORY_LABEL {
-            Label: windows::Win32::Security::SID_AND_ATTRIBUTES {
-                Sid: sid,
+            Label: SID_AND_ATTRIBUTES {
+                Sid: PSID(sid),
                 Attributes: 0,
             },
         };
 
         let _ = SetTokenInformation(
             token,
-            TOKEN_INFORMATION_CLASS::TokenIntegrityLevel,
+            TOKEN_INFORMATION_CLASS(25),
             &label as *const _ as *const core::ffi::c_void,
             std::mem::size_of::<TOKEN_MANDATORY_LABEL>() as u32,
         );

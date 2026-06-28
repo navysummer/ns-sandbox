@@ -25,7 +25,7 @@ jobs:
             pkgs: musl-tools
           - target: i686-unknown-linux-gnu
             runner: ubuntu-latest
-            pkgs: gcc-i686-linux-gnu libc6-dev-i386-cross
+            pkgs: gcc-multilib libc6-dev-i386
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-24.04-arm
             pkgs: ""
@@ -49,9 +49,6 @@ jobs:
         shell: bash
         run: |
           case "${{ matrix.target }}" in
-            i686-unknown-linux-gnu)
-              echo "CC_i686_unknown_linux_gnu=i686-linux-gnu-gcc" >> $GITHUB_ENV
-              ;;
             x86_64-unknown-linux-musl)
               echo "CC_x86_64_unknown_linux_musl=musl-gcc" >> $GITHUB_ENV
               ;;
