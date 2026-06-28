@@ -1,3 +1,161 @@
+name: Build & Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-linux:
+    name: Build Linux (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            pkgs: ""
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-latest
+            pkgs: musl-tools
+          - target: i686-unknown-linux-gnu
+            runner: ubuntu-latest
+            pkgs: gcc-multilib libc6-dev-i386
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            pkgs: ""
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+            pkgs: musl-tools
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cross-compilation tools
+        if: matrix.pkgs != ''
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.pkgs }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Configure linker for cross targets
+        shell: bash
+        run: |
+          case "${{ matrix.target }}" in
+            x86_64-unknown-linux-musl)
+              echo "CC_x86_64_unknown_linux_musl=musl-gcc" >> $GITHUB_ENV
+              ;;
+            aarch64-unknown-linux-musl)
+              echo "CC_aarch64_unknown_linux_musl=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+              ;;
+          esac
+
+      - name: Build release
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Prepare artifacts
+        run: |
+          mkdir -p release
+          BINARY="ns-sandbox"
+          ARCHIVE_NAME="ns-sandbox-${{ github.ref_name }}-${{ matrix.target }}.tar.gz"
+          cp "target/${{ matrix.target }}/release/$BINARY" "release/"
+          cd release
+          tar czf "$ARCHIVE_NAME" "$BINARY"
+          sha256sum "$BINARY" > "$BINARY.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ns-sandbox-${{ matrix.target }}
+          path: release/
+
+  build-macos:
+    name: Build macOS (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            runner: macos-15-intel
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build release
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Prepare artifacts
+        run: |
+          mkdir -p release
+          BINARY="ns-sandbox"
+          ARCHIVE_NAME="ns-sandbox-${{ github.ref_name }}-${{ matrix.target }}.tar.gz"
+          cp "target/${{ matrix.target }}/release/$BINARY" "release/"
+          cd release
+          tar czf "$ARCHIVE_NAME" "$BINARY"
+          if command -v sha256sum &>/dev/null; then
+            sha256sum "$BINARY" > "$BINARY.sha256"
+          else
+            shasum -a 256 "$BINARY" > "$BINARY.sha256"
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ns-sandbox-${{ matrix.target }}
+          path: release/
+
+  build-windows:
+    name: Build Windows (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build release
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Prepare artifacts
+        shell: bash
+        run: |
+          mkdir -p release
+          BINARY="ns-sandbox.exe"
+          ARCHIVE_NAME="ns-sandbox-${{ github.ref_name }}-${{ matrix.target }}.zip"
+          cp "target/${{ matrix.target }}/release/$BINARY" "release/"
+          cd release
+          7z a "$ARCHIVE_NAME" "$BINARY"
+          sha256sum "$BINARY" > "$BINARY.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ns-sandbox-${{ matrix.target }}
+          path: release/
+
   package-linux:
     name: Package Linux
     needs: [build-linux]
@@ -118,78 +276,10 @@
           name: linux-packages
           path: packages/
 
-  homebrew-core:
-    name: Update Homebrew Formula
-    needs: [release]
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout ns-sandbox
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Get version
-        id: version
-        run: |
-          VERSION="${{ github.ref_name }}"
-          VERSION="${VERSION#v}"
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Checkout homebrew-core
-        uses: actions/checkout@v4
-        with:
-          repository: navysummer/homebrew-core
-          token: ${{ secrets.GH_TOKEN }}
-          path: homebrew-core
-
-      - name: Update Homebrew Formula
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          FORMULA_PATH="homebrew-core/Formula/n/ns-sandbox.rb"
-          
-          # Get download URLs for each platform
-          LINUX_GLIBC_X86_64_URL="https://github.com/navysummer/ns-sandbox/releases/download/v${VERSION}/ns-sandbox-v${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
-          LINUX_GLIBC_ARM64_URL="https://github.com/navysummer/ns-sandbox/releases/download/v${VERSION}/ns-sandbox-v${VERSION}-aarch64-unknown-linux-gnu.tar.gz"
-          LINUX_MUSL_X86_64_URL="https://github.com/navysummer/ns-sandbox/releases/download/v${VERSION}/ns-sandbox-v${VERSION}-x86_64-unknown-linux-musl.tar.gz"
-          LINUX_MUSL_ARM64_URL="https://github.com/navysummer/ns-sandbox/releases/download/v${VERSION}/ns-sandbox-v${VERSION}-aarch64-unknown-linux-musl.tar.gz"
-          
-          # Create curl command to test URLs
-          #!/bin/bash
-          curl -sfL "${LINUX_GLIBC_X86_64_URL}" > /dev/null && echo "URL exists: ${LINUX_GLIBC_X86_64_URL}" || echo "URL error: ${LINUX_GLIBC_X86_64_URL}"
-          curl -sfL "${LINUX_GLIBC_ARM64_URL}" > /dev/null && echo "URL exists: ${LINUX_GLIBC_ARM64_URL}" || echo "URL error: ${LINUX_GLIBC_ARM64_URL}"
-          curl -sfL "${LINUX_MUSL_X86_64_URL}" > /dev/null && echo "URL exists: ${LINUX_MUSL_X86_64_URL}" || echo "URL error: ${LINUX_MUSL_X86_64_URL}"
-          curl -sfL "${LINUX_MUSL_ARM64_URL}" > /dev/null && echo "URL exists: ${LINUX_MUSL_ARM64_URL}" || echo "URL error: ${LINUX_MUSL_ARM64_URL}"
-
-      - name: Create Pull Request
-        uses: peter-evans/create-pull-request@v6
-        with:
-          token: ${{ secrets.GH_TOKEN }}
-          path: homebrew-core
-          base: main
-          branch: homebrew/update-ns-sandbox-${{ github.ref_name }}
-          title: "Update ns-sandbox to version ${{ steps.version.outputs.version }}"
-          body: |
-            This PR updates ns-sandbox to version ${{ steps.version.outputs.version }}
-            
-            ## Changes
-            - Update formula version
-            - Add download URLs for Linux glibc/x86_64, glibc/arm64, musl/x86_64, musl/arm64
-            - Update checksums if needed
-            
-            ## Testing
-            Please verify that the formula builds correctly and the binaries download successfully.
-          labels: |
-            homebrew update
-            dependencies
-          assignees: navysummer
-
   release:
     name: Create Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build-linux, build-macos, build-windows, package-linux, homebrew-core]
+    needs: [build-linux, build-macos, build-windows, package-linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write
